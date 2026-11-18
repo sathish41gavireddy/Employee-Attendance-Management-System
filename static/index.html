@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Employee Attendance</title>
+<style>
+  :root { --bg:#f4f6fb; --card:#fff; --text:#1f2937; --muted:#6b7280; --primary:#4f46e5; --ok:#16a34a; --bad:#dc2626; --line:#e5e7eb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,Segoe UI,Arial,sans-serif; background:var(--bg); color:var(--text); }
+  header { background:var(--primary); color:#fff; padding:16px 24px; font-size:20px; font-weight:600; }
+  main { max-width:960px; margin:24px auto; padding:0 16px; }
+  nav { display:flex; gap:8px; margin-bottom:16px; }
+  nav button { padding:8px 18px; border:0; border-radius:8px; background:#e0e7ff; color:var(--primary); font-weight:600; cursor:pointer; }
+  nav button.active { background:var(--primary); color:#fff; }
+  .card { background:var(--card); border-radius:12px; padding:20px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; align-items:center; }
+  input { padding:9px 12px; border:1px solid var(--line); border-radius:8px; font-size:14px; }
+  input:focus { outline:2px solid #c7d2fe; }
+  button.btn { padding:9px 16px; border:0; border-radius:8px; background:var(--primary); color:#fff; cursor:pointer; font-size:14px; }
+  button.btn.ghost { background:#eef2ff; color:var(--primary); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; }
+  .pill { padding:3px 10px; border-radius:99px; font-size:12px; font-weight:600; }
+  .Present { background:#dcfce7; color:var(--ok); } .Absent { background:#fee2e2; color:var(--bad); }
+  .none { background:#f3f4f6; color:var(--muted); }
+  .mark { border:1px solid var(--line); background:#fff; padding:5px 10px; border-radius:6px; cursor:pointer; margin-right:4px; }
+  .mark.p:hover, .mark.p.on { background:var(--ok); color:#fff; } .mark.a:hover, .mark.a.on { background:var(--bad); color:#fff; }
+  tr.low { background:#fef2f2; } tr.low td:nth-child(6) { color:var(--bad); font-weight:700; }
+  .del { background:none; border:0; color:var(--bad); cursor:pointer; }
+  .empty { text-align:center; color:var(--muted); padding:24px; }
+  #toast { position:fixed; bottom:20px; right:20px; padding:12px 18px; border-radius:8px; color:#fff; display:none; max-width:320px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>Employee Attendance System</header>
+<main>
+  <nav>
+    <button data-tab="employees" class="active">Employees</button>
+    <button data-tab="attendance">Daily Attendance</button>
+    <button data-tab="report">Report</button>
+  </nav>
+
+  <section id="employees" class="card">
+    <div class="row">
+      <input id="empId" placeholder="Employee ID">
+      <input id="empName" placeholder="Full name">
+      <input id="empDept" placeholder="Department">
+      <button class="btn" onclick="addEmployee()">Add Employee</button>
+    </div>
+    <div class="row"><input id="empSearch" placeholder="Search by name or ID" oninput="loadEmployees()" style="flex:1"></div>
+    <table><thead><tr><th>ID</th><th>Name</th><th>Department</th><th></th></tr></thead><tbody id="empBody"></tbody></table>
+  </section>
+
+  <section id="attendance" class="card hidden">
+    <div class="row">
+      <input type="date" id="attDate" onchange="loadAttendance()">
+      <input id="attSearch" placeholder="Search by name or ID" oninput="loadAttendance()" style="flex:1">
+    </div>
+    <table><thead><tr><th>ID</th><th>Name</th><th>Department</th><th>Status</th><th>Mark</th></tr></thead><tbody id="attBody"></tbody></table>
+  </section>
+
+  <section id="report" class="card hidden">
+    <div class="row">
+      <label>From <input type="date" id="repStart" onchange="loadReport()"></label>
+      <label>To <input type="date" id="repEnd" onchange="loadReport()"></label>
+      <input id="repSearch" placeholder="Search by name or ID" oninput="loadReport()" style="flex:1">
+      <button class="btn ghost" onclick="downloadCsv()">Download CSV</button>
+    </div>
+    <table><thead><tr><th>ID</th><th>Name</th><th>Total Days</th><th>Present</th><th>Absent</th><th>Attendance %</th></tr></thead><tbody id="repBody"></tbody></table>
+    <p style="color:var(--muted);font-size:13px">Rows highlighted in red have attendance below 75%.</p>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+$("attDate").value = new Date().toISOString().slice(0, 10);
+
+function toast(msg, ok = true) {
+  const t = $("toast");
+  t.textContent = msg; t.style.background = ok ? "#16a34a" : "#dc2626"; t.style.display = "block";
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 3000);
+}
+
+async function api(url, method = "GET", body) {
+  try {
+    const res = await fetch(url, {
+      method, headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+  } catch (e) {
+    toast(e.message === "Failed to fetch" ? "Cannot reach the server." : e.message, false);
+    throw e;
+  }
+}
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x === b));
+  ["employees", "attendance", "report"].forEach(id => $(id).classList.toggle("hidden", id !== b.dataset.tab));
+  ({ employees: loadEmployees, attendance: loadAttendance, report: loadReport })[b.dataset.tab]();
+});
+
+async function loadEmployees() {
+  const rows = await api("/api/employees?q=" + encodeURIComponent($("empSearch").value));
+  $("empBody").innerHTML = rows.length ? rows.map(e => `
+    <tr><td>${esc(e.employee_id)}</td><td>${esc(e.name)}</td><td>${esc(e.department)}</td>
+    <td><button class="del" onclick="deleteEmployee('${esc(e.employee_id)}')">Delete</button></td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty">No employees found.</td></tr>`;
+}
+
+async function addEmployee() {
+  try {
+    await api("/api/employees", "POST", {
+      employee_id: $("empId").value, name: $("empName").value, department: $("empDept").value });
+    ["empId", "empName", "empDept"].forEach(i => $(i).value = "");
+    toast("Employee added."); loadEmployees();
+  } catch {}
+}
+
+async function deleteEmployee(id) {
+  if (!confirm(`Delete employee ${id} and all their attendance records?`)) return;
+  try { await api("/api/employees/" + encodeURIComponent(id), "DELETE"); toast("Employee deleted."); loadEmployees(); } catch {}
+}
+
+async function loadAttendance() {
+  const date = $("attDate").value;
+  if (!date) return;
+  const rows = await api(`/api/attendance?date=${date}&q=${encodeURIComponent($("attSearch").value)}`);
+  $("attBody").innerHTML = rows.length ? rows.map(r => `
+    <tr><td>${esc(r.employee_id)}</td><td>${esc(r.name)}</td><td>${esc(r.department)}</td>
+    <td><span class="pill ${r.status || "none"}">${r.status || "Not marked"}</span></td>
+    <td>
+      <button class="mark p ${r.status === "Present" ? "on" : ""}" onclick="mark('${esc(r.employee_id)}','Present',${!!r.status})">Present</button>
+      <button class="mark a ${r.status === "Absent" ? "on" : ""}" onclick="mark('${esc(r.employee_id)}','Absent',${!!r.status})">Absent</button>
+    </td></tr>`).join("")
+    : `<tr><td colspan="5" class="empty">No employees found. Add some first.</td></tr>`;
+}
+
+async function mark(id, status, exists) {
+  try {
+    await api("/api/attendance", exists ? "PUT" : "POST", { employee_id: id, date: $("attDate").value, status });
+    toast(`Marked ${status}.`); loadAttendance();
+  } catch {}
+}
+
+async function loadReport() {
+  const p = new URLSearchParams({ q: $("repSearch").value, start: $("repStart").value, end: $("repEnd").value });
+  const rows = await api("/api/report?" + p);
+  $("repBody").innerHTML = rows.length ? rows.map(r => `
+    <tr class="${r.low ? "low" : ""}"><td>${esc(r.employee_id)}</td><td>${esc(r.name)}</td>
+    <td>${r.total_days}</td><td>${r.present_days}</td><td>${r.absent_days}</td>
+    <td>${r.percentage === null ? "—" : r.percentage + "%" + (r.low ? " ⚠" : "")}</td></tr>`).join("")
+    : `<tr><td colspan="6" class="empty">No data.</td></tr>`;
+}
+
+function downloadCsv() {
+  const p = new URLSearchParams({ q: $("repSearch").value, start: $("repStart").value, end: $("repEnd").value });
+  window.location = "/api/report.csv?" + p;
+}
+
+loadEmployees();
+</script>
+</body>
+</html>
